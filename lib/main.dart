@@ -1,10 +1,10 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:bishop/bishop.dart' as bishop;
 import 'package:squares/squares.dart' as squares;
 import 'package:square_bishop/square_bishop.dart';
 import 'package:stockfish/stockfish.dart';
+import 'selection_page.dart';
+import 'util.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,35 +16,33 @@ class App extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Play with stockfish',
+      title: 'Play with Stockfish',
       theme: ThemeData(
         primarySwatch: Colors.blue,
       ),
-      home: const HomePage(),
+      home: const SelectionPage(), // Start with the selection page
     );
   }
 }
 
 class HomePage extends StatefulWidget {
-  const HomePage({Key? key}) : super(key: key);
+  final int playerColor; // Add player color selection
+  const HomePage({Key? key, required this.playerColor}) : super(key: key);
+
   @override
   State<HomePage> createState() => _HomePageState();
 }
 
 class _HomePageState extends State<HomePage> {
-  late bishop.Game game;
-  late SquaresState state;
-  int player = squares.Squares.white;
-  bool aiThinking = false;
-  bool flipBoard = false;
-  String fen='';
-  String bestMove='';
-  String engineStatus='';
-  String output='';
-  final stockfish = Stockfish();
 
   @override
   void initState() {
+
+
+    stockfish = Stockfish();
+
+    player = widget.playerColor;
+    engine = player == squares.Squares.white ? squares.Squares.black : squares.Squares.white;
     _resetGame(false);
     super.initState();
   }
@@ -68,34 +66,68 @@ class _HomePageState extends State<HomePage> {
     // Ask Stockfish for the best move if it's the engine's turn
     if (state.state == squares.PlayState.theirTurn && !aiThinking) {
       setState(() => aiThinking = true);
-
-      stockfish.stdin='position fen $fen';
-      stockfish.stdin='go movetime 2000';
-
-      stockfish.stdout.listen((line) {
-        if (line.startsWith('bestmove')) {
-          bestMove = line.substring(9, 13);  // Extract the best move
-
-          // Convert Stockfish move to a bishop Move object
-          bishop.Move? aiMove = game.getMove(bestMove);
-
-          if (aiMove != null) {
-            game.makeMove(aiMove);  // Make the engine's move in the game
-            setState(() {
-              state = game.squaresState(player);
-              aiThinking = false;
-            });
-          }
-        }
-      });
+      makeStockfishMove();
     }
+  }
+
+  void startEngine() {
+    stockfish.stdin = 'isready';
+  }
+
+  void stockfishMoveController() {
+    setState(() {
+      if (player == squares.Squares.black) toggleEngine();
+      setState(() {
+        fen=game.fen;
+        game.squaresState(engine);
+        makeStockfishMove();
+
+      });
+
+    });
+  }
+
+  void makeStockfishMove() {
+    stockfish.stdin = 'position fen $fen';
+    stockfish.stdin = 'go movetime 100';
+
+    stockfish.stdout.listen((line) {
+      if (line.startsWith('bestmove')) {
+        bestMove = line.substring(9, 13); // Extract the best move
+        // Convert Stockfish move to a bishop Move object
+        bishop.Move? aiMove = game.getMove(bestMove);
+        if (aiMove != null) {
+          game.makeMove(aiMove); // Make the engine's move in the game
+          setState(() {
+            state = game.squaresState(player);
+            aiThinking = false;
+          });
+        }
+      }
+    });
+  }
+
+  void toggleEngine() {
+    setState(() {
+      engineStarted = !engineStarted;
+      engineStatus = engineStarted ? 'Engine Running' : 'Engine Stopped';
+    });
+  }
+
+  void _navigateToSelectionPage() {
+    stockfish.dispose();
+
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (context) => const SelectionPage()),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('play with stockfish'),
+        title: const Text('Play with Stockfish'),
       ),
       body: Center(
         child: Column(
@@ -120,14 +152,18 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(height: 32),
             OutlinedButton(
-              onPressed: _resetGame,
+              onPressed: _navigateToSelectionPage, // Navigate to selection page
               child: const Text('New Game'),
             ),
             Text(fen),
-            Text("Black's bestMove: "+bestMove),
+            Text("Engine status: " + engineStatus),
             IconButton(
               onPressed: _flipBoard,
               icon: const Icon(Icons.rotate_left),
+            ),
+            OutlinedButton(
+              onPressed: stockfishMoveController, // Play/Stop button
+              child: Text(engineStarted ? 'Stop Engine' : 'Start Engine'),
             ),
           ],
         ),
