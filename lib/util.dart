@@ -1,3 +1,4 @@
+//util.dart
 import 'package:stockfish/stockfish.dart';
 import 'package:bishop/bishop.dart' as bishop;
 import 'package:squares/squares.dart' as squares;
@@ -14,7 +15,7 @@ String fen = '';
 String bestMove = '';
 String engineStatus = stockfish.state.value.toString();
 String output = '';
-bool stockfishON=false;
+//bool stockfishON=false;
+int turn=-1;
 late Stockfish stockfish;
-
 
