@@ -22,15 +22,14 @@ class HomePageState extends State<HomePage> {
   late var currentState;
   late Stockfish stockfish;
   StreamSubscription<String>? stockfishSubscription;
+  List<String> moveHistory = [];
+  int currentMoveIndex = -1;
 
   bool aiThinking = false;
   bool engineStarted = true; // Engine is running by default.
   String engineStatus = "Engine Running";
   // Engine color is opposite of the player's color.
   late int engine;
-
-  // To display move history.
-  List<String> moveHistory = [];
 
   @override
   void initState() {
@@ -39,6 +38,8 @@ class HomePageState extends State<HomePage> {
     // Initialize the game.
     game = bishop.Game(variant: bishop.Variant.standard());
     currentState = game.squaresState(widget.playerColor);
+    moveHistory.add(game.fen);
+    currentMoveIndex = 0;
 
     // Initialize Stockfish.
     stockfish = Stockfish();
@@ -52,15 +53,20 @@ class HomePageState extends State<HomePage> {
     stockfishSubscription = stockfish.stdout.listen((String line) {
       if (line.startsWith("bestmove") && aiThinking) {
         final parts = line.split(' ');
-        if (parts.isNotEmpty) {
+        if (parts.isNotEmpty && parts.length >= 2) {
           String bestMoveStr = parts[1];
           bishop.Move? aiMove = game.getMove(bestMoveStr);
           if (aiMove != null) {
             game.makeMove(aiMove);
-            moveHistory.add(bestMoveStr);
             setState(() {
               currentState = game.squaresState(widget.playerColor);
               aiThinking = false;
+              // Update move history for engine moves
+              if (currentMoveIndex < moveHistory.length - 1) {
+                moveHistory = moveHistory.sublist(0, currentMoveIndex + 1);
+              }
+              moveHistory.add(game.fen);
+              currentMoveIndex = moveHistory.length - 1;
             });
           }
         }
@@ -84,7 +90,6 @@ class HomePageState extends State<HomePage> {
       }
     });
   }
-
   @override
   void dispose() {
     stockfishSubscription?.cancel();
@@ -100,13 +105,19 @@ class HomePageState extends State<HomePage> {
       MaterialPageRoute(builder: (context) => const SelectionPage()),
     );
   }
-
+  // Handle a move made on the chessboard.
   void onMove(squares.Move move) {
+    // Use the built-in move maker which returns a bool indicating success.
     bool result = game.makeSquaresMove(move);
     if (result) {
-      moveHistory.add(move.toString());
       setState(() {
         currentState = game.squaresState(widget.playerColor);
+        // Add the move to history and update the index
+        if (currentMoveIndex < moveHistory.length - 1) {
+          moveHistory = moveHistory.sublist(0, currentMoveIndex + 1);
+        }
+        moveHistory.add(game.fen);
+        currentMoveIndex++;
       });
       if (engineStarted &&
           currentState.state == squares.PlayState.theirTurn &&
@@ -118,13 +129,38 @@ class HomePageState extends State<HomePage> {
       }
     }
   }
-
+  void undoMove() {
+    // Undo both player and engine moves together
+    if (currentMoveIndex > 1) {
+      setState(() {
+        currentMoveIndex -= 2; // Go back two moves
+        game = bishop.Game(fen: moveHistory[currentMoveIndex]);
+        currentState = game.squaresState(widget.playerColor);
+      });
+    } else if (currentMoveIndex > 0) { // Handle the case when only one move is available
+      setState(() {
+        currentMoveIndex--;
+        game = bishop.Game(fen: moveHistory[currentMoveIndex]);
+        currentState = game.squaresState(widget.playerColor);
+      });
+    }
+  }
+  void redoMove() {
+    if (currentMoveIndex < moveHistory.length - 1) {
+      setState(() {
+        currentMoveIndex++;
+        game = bishop.Game(fen: moveHistory[currentMoveIndex]);
+        currentState = game.squaresState(widget.playerColor);
+      });
+    }
+  }
+  // Send commands to Stockfish.
   void makeStockfishMove() {
     if (!engineStarted) return;
     stockfish.stdin = 'position fen ${game.fen}';
-    stockfish.stdin = 'go movetime 100';
+    stockfish.stdin = 'go movetime 3000';
   }
-
+  // Toggle the engine on and off.
   void toggleEngine() {
     setState(() {
       engineStarted = !engineStarted;
@@ -139,11 +175,9 @@ class HomePageState extends State<HomePage> {
       makeStockfishMove();
     }
   }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // Radial gradient background.
       body: Container(
         decoration: BoxDecoration(
           gradient: RadialGradient(
@@ -155,13 +189,11 @@ class HomePageState extends State<HomePage> {
         child: SafeArea(
           child: Column(
             children: [
-              // Top control panel.
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    // "New Game" button now navigates back to selection page.
                     OutlinedButton(
                       onPressed: navigateToSelectionPage,
                       style: OutlinedButton.styleFrom(
@@ -172,7 +204,6 @@ class HomePageState extends State<HomePage> {
                         style: TextStyle(color: Colors.white),
                       ),
                     ),
-                    // Engine toggle button.
                     OutlinedButton(
                       onPressed: toggleEngine,
                       style: OutlinedButton.styleFrom(
@@ -191,20 +222,18 @@ class HomePageState extends State<HomePage> {
                 child: Center(
                   child: GlassMorphismContainer(
                     child: squares.BoardController(
-                      // Use the board state without flipping.
                       state: currentState.board,
                       playState: currentState.state,
                       pieceSet: squares.PieceSet.merida(),
                       theme: squares.BoardTheme.brown,
                       moves: currentState.moves,
                       onMove: onMove,
-                      promotionBehaviour:
-                      squares.PromotionBehaviour.autoPremove,
+                      promotionBehaviour: squares.PromotionBehaviour.autoPremove,
                     ),
                   ),
                 ),
               ),
-              // Game status and move history.
+              // Game status and controls
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
@@ -214,26 +243,30 @@ class HomePageState extends State<HomePage> {
                     const SizedBox(height: 8),
                     Text("Engine status: $engineStatus",
                         style: const TextStyle(color: Colors.white)),
-                    const SizedBox(height: 8),
-                    Container(
-                      height: 100,
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.3),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: SingleChildScrollView(
-                        child: Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: Text(
-                            moveHistory.join(" "),
-                            style: const TextStyle(color: Colors.white),
-                          ),
+                    const SizedBox(height: 16),
+                    // Undo/Redo controls
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        IconButton(
+                          onPressed: undoMove,
+                          icon: const Icon(Icons.arrow_back),
+                          color: Colors.white,
+                          tooltip: 'Undo move',
                         ),
-                      ),
+                        const SizedBox(width: 32),
+                        IconButton(
+                          onPressed: redoMove,
+                          icon: const Icon(Icons.arrow_forward),
+                          color: Colors.white,
+                          tooltip: 'Redo move',
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
+              if (aiThinking) const LinearProgressIndicator(),
             ],
           ),
         ),
