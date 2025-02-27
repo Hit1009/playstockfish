@@ -8,8 +8,9 @@ class GlassMorphismButton extends StatelessWidget {
   final String text;
   final VoidCallback onPressed;
 
-  const GlassMorphismButton({
+  const GlassMorphismButton({ 
     Key? key,
+    
     required this.text,
     required this.onPressed,
   }) : super(key: key);

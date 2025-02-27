@@ -16,6 +16,7 @@ class App extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: "Play with Stockfish",
       theme: ThemeData(primarySwatch: Colors.blue),
+      
       home: const SelectionPage(),
     );
   }}

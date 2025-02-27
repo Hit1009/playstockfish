@@ -56,6 +56,7 @@ class HomePageState extends State<HomePage> {
         final parts = line.split(' ');
         if (parts.isNotEmpty && parts.length >= 2) {
           String bestMoveStr = parts[1];
+           
           bishop.Move? aiMove = game.getMove(bestMoveStr);
           if (aiMove != null) {
             // Add the move in algebraic notation
