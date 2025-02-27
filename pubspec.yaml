@@ -28,6 +28,7 @@ environment:
 # the latest version available on pub.dev. To see which dependencies have newer
 # versions available, run `flutter pub outdated`.
 dependencies:
+  figma2flutter: ^0.3.1-alpha
   square_bishop: ^0.3.0
   bishop: ^1.4.4
   squares: ^1.2.1

@@ -22,15 +22,15 @@ class HomePageState extends State<HomePage> {
   late var currentState;
   late Stockfish stockfish;
   StreamSubscription<String>? stockfishSubscription;
+  List<String> moveHistory = [];
+  List<String> algebraicMoveHistory = [];
+  int currentMoveIndex = -1;
 
   bool aiThinking = false;
   bool engineStarted = true; // Engine is running by default.
   String engineStatus = "Engine Running";
   // Engine color is opposite of the player's color.
   late int engine;
-
-  // To display move history.
-  List<String> moveHistory = [];
 
   @override
   void initState() {
@@ -39,6 +39,8 @@ class HomePageState extends State<HomePage> {
     // Initialize the game.
     game = bishop.Game(variant: bishop.Variant.standard());
     currentState = game.squaresState(widget.playerColor);
+    moveHistory.add(game.fen);
+    currentMoveIndex = 0;
 
     // Initialize Stockfish.
     stockfish = Stockfish();
@@ -52,16 +54,30 @@ class HomePageState extends State<HomePage> {
     stockfishSubscription = stockfish.stdout.listen((String line) {
       if (line.startsWith("bestmove") && aiThinking) {
         final parts = line.split(' ');
-        if (parts.isNotEmpty) {
+        if (parts.isNotEmpty && parts.length >= 2) {
           String bestMoveStr = parts[1];
           bishop.Move? aiMove = game.getMove(bestMoveStr);
           if (aiMove != null) {
+            // Add the move in algebraic notation
+            String algebraicMove = game.toSan(aiMove);
             game.makeMove(aiMove);
-            moveHistory.add(bestMoveStr);
             setState(() {
               currentState = game.squaresState(widget.playerColor);
               aiThinking = false;
+              // Update move history for engine moves
+              if (currentMoveIndex < moveHistory.length - 1) {
+                moveHistory = moveHistory.sublist(0, currentMoveIndex + 1);
+                algebraicMoveHistory = algebraicMoveHistory.sublist(0, currentMoveIndex + 1);
+              }
+              moveHistory.add(game.fen);
+              algebraicMoveHistory.add(algebraicMove);
+              currentMoveIndex = moveHistory.length - 1;
             });
+            
+            // Check for game ending conditions after engine move
+            if (currentState.state == squares.PlayState.finished) {
+              checkGameEndingCondition();
+            }
           }
         }
       }
@@ -84,7 +100,6 @@ class HomePageState extends State<HomePage> {
       }
     });
   }
-
   @override
   void dispose() {
     stockfishSubscription?.cancel();
@@ -100,15 +115,31 @@ class HomePageState extends State<HomePage> {
       MaterialPageRoute(builder: (context) => const SelectionPage()),
     );
   }
-
+  // Handle a move made on the chessboard.
   void onMove(squares.Move move) {
     bool result = game.makeSquaresMove(move);
     if (result) {
-      moveHistory.add(move.toString());
+      // Get the last move in algebraic notation
+      String algebraicMove = "";
+      if (game.history.isNotEmpty && game.history.last.meta?.moveMeta != null) {
+        algebraicMove = game.history.last.meta!.moveMeta!.formatted;
+      }
+      
       setState(() {
         currentState = game.squaresState(widget.playerColor);
+        if (currentMoveIndex < moveHistory.length - 1) {
+          moveHistory = moveHistory.sublist(0, currentMoveIndex + 1);
+          algebraicMoveHistory = algebraicMoveHistory.sublist(0, currentMoveIndex + 1);
+        }
+        moveHistory.add(game.fen);
+        algebraicMoveHistory.add(algebraicMove);
+        currentMoveIndex++;
       });
-      if (engineStarted &&
+      
+      // Check for game ending conditions
+      if (currentState.state == squares.PlayState.finished) {
+        checkGameEndingCondition();
+      } else if (engineStarted &&
           currentState.state == squares.PlayState.theirTurn &&
           !aiThinking) {
         setState(() {
@@ -118,13 +149,38 @@ class HomePageState extends State<HomePage> {
       }
     }
   }
-
+  void undoMove() {
+    // Undo both player and engine moves together
+    if (currentMoveIndex > 1) {
+      setState(() {
+        currentMoveIndex -= 2; // Go back two moves
+        game = bishop.Game(fen: moveHistory[currentMoveIndex]);
+        currentState = game.squaresState(widget.playerColor);
+      });
+    } else if (currentMoveIndex > 0) { // Handle the case when only one move is available
+      setState(() {
+        currentMoveIndex--;
+        game = bishop.Game(fen: moveHistory[currentMoveIndex]);
+        currentState = game.squaresState(widget.playerColor);
+      });
+    }
+  }
+  void redoMove() {
+    if (currentMoveIndex < moveHistory.length - 1) {
+      setState(() {
+        currentMoveIndex++;
+        game = bishop.Game(fen: moveHistory[currentMoveIndex]);
+        currentState = game.squaresState(widget.playerColor);
+      });
+    }
+  }
+  // Send commands to Stockfish.
   void makeStockfishMove() {
     if (!engineStarted) return;
     stockfish.stdin = 'position fen ${game.fen}';
     stockfish.stdin = 'go movetime 100';
   }
-
+  // Toggle the engine on and off.
   void toggleEngine() {
     setState(() {
       engineStarted = !engineStarted;
@@ -139,11 +195,61 @@ class HomePageState extends State<HomePage> {
       makeStockfishMove();
     }
   }
-
+  
+  // Check game ending condition and show appropriate dialog
+  void checkGameEndingCondition() {
+    String title = "Game Over";
+    String message = "";
+    
+    if (game.checkmate) {
+      // Determine who won based on whose turn it is
+      bool whiteWon = game.turn == 1; // In bishop, turn 0 is white, 1 is black
+      String winner = whiteWon ? "Black" : "White";
+      message = "$winner wins by checkmate!";
+    } else if (game.stalemate) {
+      message = "Game drawn by stalemate.";
+    } else if (game.insufficientMaterial) {
+      message = "Game drawn by insufficient material.";
+    } 
+     else {
+      message = "Game ended.";
+    }
+    
+    // Show dialog after a short delay to ensure UI is updated
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (BuildContext context) {
+            return AlertDialog(
+              backgroundColor: Colors.blueGrey.shade900,
+              title: Text(title, style: const TextStyle(color: Colors.white)),
+              content: Text(message, style: const TextStyle(color: Colors.white)),
+              actions: [
+                TextButton(
+                  child: const Text("New Game", style: TextStyle(color: Colors.white)),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    navigateToSelectionPage();
+                  },
+                ),
+                TextButton(
+                  child: const Text("Close", style: TextStyle(color: Colors.white)),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                  },
+                ),
+              ],
+            );
+          },
+        );
+      }
+    });
+  }
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // Radial gradient background.
       body: Container(
         decoration: BoxDecoration(
           gradient: RadialGradient(
@@ -155,13 +261,11 @@ class HomePageState extends State<HomePage> {
         child: SafeArea(
           child: Column(
             children: [
-              // Top control panel.
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    // "New Game" button now navigates back to selection page.
                     OutlinedButton(
                       onPressed: navigateToSelectionPage,
                       style: OutlinedButton.styleFrom(
@@ -172,7 +276,6 @@ class HomePageState extends State<HomePage> {
                         style: TextStyle(color: Colors.white),
                       ),
                     ),
-                    // Engine toggle button.
                     OutlinedButton(
                       onPressed: toggleEngine,
                       style: OutlinedButton.styleFrom(
@@ -186,54 +289,101 @@ class HomePageState extends State<HomePage> {
                   ],
                 ),
               ),
-              // Chessboard area inside a glassmorphism container.
+              // Chessboard area inside a container with subtle styling
               Expanded(
                 child: Center(
                   child: GlassMorphismContainer(
                     child: squares.BoardController(
-                      // Use the board state without flipping.
                       state: currentState.board,
                       playState: currentState.state,
                       pieceSet: squares.PieceSet.merida(),
                       theme: squares.BoardTheme.brown,
                       moves: currentState.moves,
                       onMove: onMove,
-                      promotionBehaviour:
-                      squares.PromotionBehaviour.autoPremove,
+                      promotionBehaviour: squares.PromotionBehaviour.autoPremove,
                     ),
                   ),
                 ),
               ),
-              // Game status and move history.
+              // Move history display
+              Container(
+                height: 100,
+                margin: const EdgeInsets.symmetric(horizontal: 16.0),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: Colors.white.withOpacity(0.2),
+                    width: 1,
+                  ),
+                ),
+                child: algebraicMoveHistory.isEmpty
+                    ? const Center(
+                        child: Text(
+                          "No moves yet",
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      )
+                    : ListView.builder(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: algebraicMoveHistory.length,
+                        itemBuilder: (context, index) {
+                          return Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            margin: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: index == currentMoveIndex
+                                  ? Colors.blueAccent.withOpacity(0.3)
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                            child: Center(
+                              child: Text(
+                                "${(index ~/ 2) + 1}${index % 2 == 0 ? '.' : '...'} ${algebraicMoveHistory[index]}",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: index == currentMoveIndex
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+              
+              // Game status and controls
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
                   children: [
-                    Text("FEN: ${game.fen}",
-                        style: const TextStyle(color: Colors.white)),
-                    const SizedBox(height: 8),
                     Text("Engine status: $engineStatus",
                         style: const TextStyle(color: Colors.white)),
-                    const SizedBox(height: 8),
-                    Container(
-                      height: 100,
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.3),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: SingleChildScrollView(
-                        child: Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: Text(
-                            moveHistory.join(" "),
-                            style: const TextStyle(color: Colors.white),
-                          ),
+                    const SizedBox(height: 16),
+                    // Undo/Redo controls
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        IconButton(
+                          onPressed: undoMove,
+                          icon: const Icon(Icons.arrow_back),
+                          color: Colors.white,
+                          tooltip: 'Undo move',
                         ),
-                      ),
+                        const SizedBox(width: 32),
+                        IconButton(
+                          onPressed: redoMove,
+                          icon: const Icon(Icons.arrow_forward),
+                          color: Colors.white,
+                          tooltip: 'Redo move',
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
+              if (aiThinking) const LinearProgressIndicator(),
             ],
           ),
         ),
@@ -242,7 +392,7 @@ class HomePageState extends State<HomePage> {
   }
 }
 
-/// A container widget that applies a glassmorphism effect.
+/// A container widget with a simple, elegant styling.
 class GlassMorphismContainer extends StatelessWidget {
   final Widget child;
   final double borderRadius;
@@ -255,22 +405,17 @@ class GlassMorphismContainer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(borderRadius),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.2),
-            borderRadius: BorderRadius.circular(borderRadius),
-            border: Border.all(
-              color: Colors.white.withOpacity(0.3),
-            ),
-          ),
-          child: child,
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(borderRadius),
+        border: Border.all(
+          color: Colors.white.withOpacity(0.2),
+          width: 1,
         ),
       ),
+      child: child,
     );
   }
 }
